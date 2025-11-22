@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from './lib/supabaseClient';
 
 export default function Home() {
   const [events, setEvents] = useState<any[]>([]);
@@ -9,11 +8,18 @@ export default function Home() {
 
   useEffect(() => {
     const fetchEvents = async () => {
+      const { supabase } = await import('./lib/supabaseClient');
+      if (!supabase) {
+        console.warn('Supabase client not configured');
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase.from('events').select('event_name');
       if (error) {
         console.error('Error fetching events:', error);
       } else {
-        setEvents(data);
+        setEvents(data || []);
         console.log('Fetched events:', data);
       }
       setLoading(false);
