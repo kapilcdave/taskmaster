@@ -6,9 +6,9 @@ import { supabase } from '@/lib/supabase'
 
 // --- CONSTANTS ---
 const START_HOUR = 8
-const END_HOUR = 22 // Extended to 10 PM for better range
+const END_HOUR = 22 
 const SLOTS_PER_HOUR = 2 // 30 Minute Increments
-const SLOT_HEIGHT = 32 // Taller for mobile touch targets
+const SLOT_HEIGHT = 32 
 const MAX_DAYS = 7
 
 // --- TYPES ---
@@ -23,10 +23,11 @@ function TaskmasterContent() {
   
   // --- STATE ---
   const [eventId, setEventId] = useState<string | null>(null)
-  const [eventName, setEventName] = useState('') // Starts blank
+  const [eventName, setEventName] = useState('') 
   const [userName, setUserName] = useState('')
   const [loading, setLoading] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
+  const [hasChanges, setHasChanges] = useState(false) // New state for button style
 
   // Dates
   const [startDate, setStartDate] = useState<Date | null>(new Date())
@@ -58,6 +59,7 @@ function TaskmasterContent() {
       loadEvent(id)
     } else {
       initializeGrid(3)
+      setHasChanges(true) // New event always has "unsaved" state initially
     }
   }, [searchParams])
 
@@ -107,7 +109,6 @@ function TaskmasterContent() {
 
   const handleSave = async () => {
     if (!userName.trim()) return alert("Enter your name first!")
-    // Default name if empty
     const finalEventName = eventName.trim() || 'Untitled Jam'
     setLoading(true)
 
@@ -133,7 +134,9 @@ function TaskmasterContent() {
       await saveResponse(eventId)
       setStatusMsg("Saved!")
     }
+    
     setLoading(false)
+    setHasChanges(false) // Reset button state
     setTimeout(() => setStatusMsg(''), 2000)
   }
 
@@ -203,6 +206,7 @@ function TaskmasterContent() {
     const newGrid = [...myGrid]
     newGrid[index] = val
     setMyGrid(newGrid)
+    setHasChanges(true) // Mark as dirty
   }
 
   // --- DATE PICKER ---
@@ -271,8 +275,8 @@ function TaskmasterContent() {
         const isHour = s === 0
         const label = (h === 12 && isHour) ? '12 PM' : (isHour ? `${h > 12 ? h-12 : h} ${h >= 12 ? 'PM' : 'AM'}` : '')
         timeLabels.push(
-          <div key={`t-${h}-${s}`} className="flex justify-end pr-2 text-[0.65rem] font-bold text-white relative box-border bg-black z-20" style={{ height: SLOT_HEIGHT }}>
-             {isHour && <span className="-mt-2">{label}</span>}
+          <div key={`t-${h}-${s}`} className="flex justify-end pr-2 items-center text-[0.65rem] font-bold text-gray-400 border-b border-transparent relative box-border bg-black z-20" style={{ height: SLOT_HEIGHT }}>
+             {isHour && <span>{label}</span>}
           </div>
         )
       }
@@ -306,7 +310,7 @@ function TaskmasterContent() {
             onMouseEnter={() => handleSlotInteraction(globalIndex, false)}
             className={`
                 border-b border-r border-gray-800 box-border cursor-pointer relative w-full transition-colors
-                ${isHourStart ? 'border-b-white/30' : ''} 
+                ${isHourStart ? 'border-b-gray-600' : ''} 
                 ${isSelected ? '!bg-green-500' : ''}
                 ${isFocused ? 'ring-2 ring-white z-10' : ''}
             `}
@@ -328,7 +332,7 @@ function TaskmasterContent() {
 
     return (
       <div className="flex border-t border-gray-700 bg-black w-full h-full">
-         <div className="flex flex-col min-w-[40px] sticky left-0 z-40 border-r border-gray-700 pt-[50px] bg-black shadow-[2px_0_10px_rgba(0,0,0,0.5)]">
+         <div className="flex flex-col min-w-[50px] sticky left-0 z-40 border-r border-gray-700 pt-[50px] bg-black shadow-[2px_0_10px_rgba(0,0,0,0.5)]">
             {timeLabels}
          </div>
          <div className="flex flex-1 overflow-auto no-scrollbar">
@@ -338,21 +342,27 @@ function TaskmasterContent() {
     )
   }
 
+  const getDateRangeString = () => {
+      if (!startDate) return 'Select Dates';
+      const fmt = (d: Date) => `${d.getMonth()+1}/${d.getDate()}`;
+      if (endDate) return `${fmt(startDate)} - ${fmt(endDate)}`;
+      return `${fmt(startDate)} - Select End`;
+  }
+
   return (
     <div className="h-screen bg-black text-white font-mono flex flex-col overflow-hidden" onMouseUp={() => setIsDragging(false)}>
       
       {/* TOP BAR */}
-      <div className="flex-none p-4 border-b border-gray-800 bg-black z-50 space-y-4">
-        {/* SITE TITLE */}
-        <div>
-            <h1 className="text-xl font-bold tracking-widest text-white">WHEN2JAM</h1>
+      <div className="flex-none p-4 border-b border-gray-800 bg-black z-50 space-y-3">
+        {/* TITLE & LINK */}
+        <div className="flex justify-between items-center">
+            <h1 className="text-lg font-bold tracking-widest text-white lowercase">when2jam</h1>
         </div>
         
-        {/* INPUTS */}
-        <div className="space-y-3">
-            {/* EVENT NAME INPUT */}
-            <div>
-                <label className="text-[10px] text-gray-500 uppercase block mb-1">Event Name</label>
+        {/* COMPACT INPUT ROW */}
+        <div className="flex flex-col sm:flex-row gap-3">
+            {/* Event Name */}
+            <div className="flex-1">
                 <input 
                     value={eventName} 
                     onChange={(e) => !eventId && setEventName(e.target.value)} 
@@ -362,30 +372,29 @@ function TaskmasterContent() {
                 />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-                <div>
-                    <label className="text-[10px] text-gray-500 uppercase block mb-1">Your Name</label>
-                    <input value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 p-2 text-sm focus:border-white outline-none transition-colors" placeholder="Required" />
+            {/* User Name */}
+            <div className="flex-1">
+                <input value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 p-2 text-sm focus:border-white outline-none transition-colors" placeholder="Your Name" />
+            </div>
+
+            {/* Dates */}
+            <div className="flex-1 relative">
+                <div onClick={() => !eventId && setShowDatePicker(!showDatePicker)} className={`w-full bg-zinc-900 border border-zinc-800 p-2 text-sm truncate ${!eventId ? 'cursor-pointer hover:border-gray-600' : 'text-gray-500'}`}>
+                    {getDateRangeString()}
                 </div>
-                <div className="relative">
-                    <label className="text-[10px] text-gray-500 uppercase block mb-1">Dates</label>
-                    <div onClick={() => !eventId && setShowDatePicker(!showDatePicker)} className={`w-full bg-zinc-900 border border-zinc-800 p-2 text-sm truncate ${!eventId ? 'cursor-pointer hover:border-gray-600' : 'text-gray-500'}`}>
-                        {startDate ? `${startDate.getMonth()+1}/${startDate.getDate()} - ${endDate?.getDate()}` : 'Select'}
-                    </div>
-                    {/* Date Picker Popup */}
-                    {showDatePicker && !eventId && (
-                        <div className="absolute top-full right-0 mt-1 bg-zinc-900 border border-gray-700 p-3 z-[60] w-64 shadow-xl">
-                            <div className="flex justify-between items-center mb-2">
-                                <button onClick={() => changeMonth(-1)} className="p-1">&lt;</button>
-                                <span className="text-sm font-bold">{pickerMonth.toLocaleString('default', { month: 'short' })}</span>
-                                <button onClick={() => changeMonth(1)} className="p-1">&gt;</button>
-                            </div>
-                            <div className="grid grid-cols-7 gap-1 text-center text-xs">
-                                {renderMiniCalendarCells(pickerMonth, startDate, endDate, handleDayClick)}
-                            </div>
+                {/* Date Picker Popup */}
+                {showDatePicker && !eventId && (
+                    <div className="absolute top-full right-0 mt-1 bg-zinc-900 border border-gray-700 p-3 z-[60] w-64 shadow-xl">
+                        <div className="flex justify-between items-center mb-2">
+                            <button onClick={() => changeMonth(-1)} className="p-1">&lt;</button>
+                            <span className="text-sm font-bold">{pickerMonth.toLocaleString('default', { month: 'short' })}</span>
+                            <button onClick={() => changeMonth(1)} className="p-1">&gt;</button>
                         </div>
-                    )}
-                </div>
+                        <div className="grid grid-cols-7 gap-1 text-center text-xs">
+                            {renderMiniCalendarCells(pickerMonth, startDate, endDate, handleDayClick)}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
       </div>
@@ -413,18 +422,26 @@ function TaskmasterContent() {
              <div className="flex gap-2 items-center">
                 {statusMsg && <span className="text-green-400 text-xs font-bold animate-pulse">{statusMsg}</span>}
                 
-                {/* Buttons placed together as requested */}
                 {eventId && (
                     <button onClick={copyLink} className="border border-gray-500 text-white px-4 py-2 text-sm font-bold uppercase hover:border-white transition-colors">
                         Copy Link
                     </button>
                 )}
                 
-                <button onClick={handleSave} disabled={loading} className="bg-white text-black px-6 py-2 text-sm font-bold uppercase hover:bg-gray-200 disabled:opacity-50">
+                <button 
+                    onClick={handleSave} 
+                    disabled={loading} 
+                    className={`px-6 py-2 text-sm font-bold uppercase transition-colors disabled:opacity-50 border ${hasChanges ? 'bg-white text-black border-white hover:bg-gray-200' : 'bg-black text-white border-white hover:bg-zinc-800'}`}
+                >
                     {loading ? '...' : (eventId ? 'Save' : 'Create')}
                 </button>
              </div>
          </div>
+      </div>
+
+      {/* FOOTER */}
+      <div className="flex-none p-4 border-t border-gray-800 bg-black text-center text-xs text-gray-500">
+        made with <span className="text-white">♥</span> by kapil
       </div>
 
     </div>
