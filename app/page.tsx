@@ -6,9 +6,9 @@ import { supabase } from '@/lib/supabase'
 
 // --- CONSTANTS ---
 const START_HOUR = 8
-const END_HOUR = 22 
-const SLOTS_PER_HOUR = 2 // 30 Minute Increments
-const SLOT_HEIGHT = 32 
+const END_HOUR = 20 // 8 PM (12 Hours total)
+const SLOTS_PER_HOUR = 1 // 1 Hour increments (Simpler)
+const SLOT_HEIGHT = 48 // Taller blocks since we have fewer of them
 const MAX_DAYS = 7
 
 // --- TYPES ---
@@ -180,13 +180,11 @@ function TaskmasterContent() {
     
     const totalMinutes = timeIndex * (60 / SLOTS_PER_HOUR)
     const hour = START_HOUR + Math.floor(totalMinutes / 60)
-    const minutes = totalMinutes % 60
     
     const ampm = hour >= 12 ? 'PM' : 'AM'
     const displayHour = hour > 12 ? hour - 12 : hour
-    const displayMin = minutes === 0 ? '00' : minutes
     
-    return `${date.toLocaleDateString('en-US', { weekday: 'short' })} ${displayHour}:${displayMin} ${ampm}`
+    return `${date.toLocaleDateString('en-US', { weekday: 'short' })} ${displayHour} ${ampm}`
   }
 
   const handleSlotInteraction = (index: number, isDown: boolean) => {
@@ -206,7 +204,7 @@ function TaskmasterContent() {
     const newGrid = [...myGrid]
     newGrid[index] = val
     setMyGrid(newGrid)
-    setHasChanges(true) // Mark as dirty
+    setHasChanges(true)
   }
 
   // --- DATE PICKER ---
@@ -265,89 +263,82 @@ function TaskmasterContent() {
     )
   }
 
-  const renderCalendarGrid = () => {
+  const renderSimpleGrid = () => {
     if (!startDate) return null
-    const days = endDate ? Math.ceil(Math.abs(endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1 : 1
+    const daysCount = endDate ? Math.ceil(Math.abs(endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1 : 1
     
-    const timeLabels = []
-    for(let h=START_HOUR; h<END_HOUR; h++) {
-      for(let s=0; s<SLOTS_PER_HOUR; s++) {
-        const isHour = s === 0
-        const label = (h === 12 && isHour) ? '12 PM' : (isHour ? `${h > 12 ? h-12 : h} ${h >= 12 ? 'PM' : 'AM'}` : '')
-        timeLabels.push(
-          <div key={`t-${h}-${s}`} className="flex justify-end pr-2 items-center text-[0.65rem] font-bold text-gray-400 border-b border-transparent relative box-border z-20" style={{ height: SLOT_HEIGHT }}>
-             {isHour && <span>{label}</span>}
-          </div>
-        )
-      }
-    }
+    // Prepare Data: We need to iterate Row by Row (Time), then Column by Column (Day)
+    const rows = []
+    const totalHours = END_HOUR - START_HOUR
 
-    const dayColumns = []
-    for (let d=0; d<days; d++) {
-      const currentDay = new Date(startDate)
-      currentDay.setDate(startDate.getDate() + d)
-      const daySlots = []
-      const dayOffset = d * (END_HOUR - START_HOUR) * SLOTS_PER_HOUR
-      
-      for(let i=0; i < (END_HOUR - START_HOUR) * SLOTS_PER_HOUR; i++) {
-        const globalIndex = dayOffset + i
-        const isSelected = myGrid[globalIndex] === 1
-        const isFocused = selectedSlot === globalIndex
-        const isHourStart = i % SLOTS_PER_HOUR === 0
-        
-        let bgStyle = {}
-        const count = (heatmap && heatmap[globalIndex]) || 0
-        const max = groupResponses.length || 1
-        if (eventId && count > 0) {
-           const intensity = count / max
-           bgStyle = { backgroundColor: `rgba(255, 255, 255, ${intensity})` }
-        }
-        
-        daySlots.push(
-          <div 
-            key={`s-${globalIndex}`} 
-            onMouseDown={() => handleSlotInteraction(globalIndex, true)} 
-            onMouseEnter={() => handleSlotInteraction(globalIndex, false)}
-            className={`
-                border-b border-r border-gray-800 box-border cursor-pointer relative w-full transition-colors
-                ${isHourStart ? 'border-b-gray-600' : ''} 
-                ${isSelected ? '!bg-green-500' : ''}
-                ${isFocused ? 'ring-2 ring-white z-10' : ''}
-            `}
-            style={{ height: SLOT_HEIGHT, ...bgStyle }} 
-          />
+    // HEADER ROW (Dates)
+    const headerCells = []
+    // Corner spacer
+    headerCells.push(<div key="corner" className="w-[50px] shrink-0 bg-black"></div>)
+    
+    for (let d = 0; d < daysCount; d++) {
+        const currentDay = new Date(startDate)
+        currentDay.setDate(startDate.getDate() + d)
+        headerCells.push(
+            <div key={`h-${d}`} className="flex-1 text-center py-2 border-b border-gray-800">
+                <div className="font-bold text-sm text-white">{currentDay.toLocaleDateString('en-US', { weekday: 'short' })}</div>
+                <div className="text-[10px] text-gray-500">{currentDay.getMonth()+1}/{currentDay.getDate()}</div>
+            </div>
         )
-      }
-      
-      dayColumns.push(
-        <div key={`d-${d}`} className="flex flex-col min-w-[70px] flex-1">
-          <div className="sticky top-0 bg-black border-b border-white py-2 text-center z-30 h-[50px] flex flex-col justify-center shadow-sm">
-            <div className="font-bold text-sm text-white">{currentDay.toLocaleDateString('en-US', { weekday: 'short' })}</div>
-            <div className="text-[10px] text-gray-400">{currentDay.getMonth()+1}/{currentDay.getDate()}</div>
-          </div>
-          <div className="w-full">{daySlots}</div>
-        </div>
-      )
+    }
+    rows.push(<div key="header" className="flex sticky top-0 bg-black z-30">{headerCells}</div>)
+
+    // TIME ROWS
+    for (let h = 0; h < totalHours; h++) {
+        const hour = START_HOUR + h
+        const label = (hour === 12) ? '12 PM' : (hour > 12 ? `${hour-12} PM` : `${hour} AM`)
+        
+        const rowCells = []
+        
+        // 1. Time Label (First "Cell" of the row)
+        rowCells.push(
+            <div key={`time-${h}`} className="w-[50px] shrink-0 flex items-center justify-end pr-2 text-[0.65rem] font-bold text-gray-400 border-b border-gray-800">
+                {label}
+            </div>
+        )
+
+        // 2. Day Slots
+        for (let d = 0; d < daysCount; d++) {
+            const dayOffset = d * totalHours
+            const globalIndex = dayOffset + h
+            
+            const isSelected = myGrid[globalIndex] === 1
+            const isFocused = selectedSlot === globalIndex
+            
+            let bgStyle = {}
+            const count = (heatmap && heatmap[globalIndex]) || 0
+            const max = groupResponses.length || 1
+            if (eventId && count > 0) {
+               const intensity = count / max
+               bgStyle = { backgroundColor: `rgba(255, 255, 255, ${intensity})` }
+            }
+
+            rowCells.push(
+                <div 
+                    key={`slot-${d}-${h}`}
+                    onMouseDown={() => handleSlotInteraction(globalIndex, true)} 
+                    onMouseEnter={() => handleSlotInteraction(globalIndex, false)}
+                    className={`
+                        flex-1 border-b border-r border-gray-800 cursor-pointer transition-colors relative
+                        ${isSelected ? '!bg-green-500' : ''}
+                        ${isFocused ? 'ring-2 ring-white z-10' : ''}
+                    `}
+                    style={{ height: SLOT_HEIGHT, ...bgStyle }}
+                />
+            )
+        }
+        rows.push(<div key={`row-${h}`} className="flex">{rowCells}</div>)
     }
 
     return (
-      <div className="flex-1 overflow-auto relative bg-black w-full">
-         {/* Container to hold Time + Days in ONE scroll area */}
-         <div className="flex min-w-max h-full">
-            
-            {/* STICKY TIME COLUMN */}
-            <div className="sticky left-0 z-40 bg-black border-r border-gray-700 flex flex-col shadow-[2px_0_10px_rgba(0,0,0,0.5)]">
-                {/* Sticky Corner Placeholder */}
-                <div className="h-[50px] border-b border-white bg-black sticky top-0 z-50"></div>
-                {timeLabels}
-            </div>
-
-            {/* DAY COLUMNS */}
-            <div className="flex flex-1">
-                {dayColumns}
-            </div>
-         </div>
-      </div>
+        <div className="w-full max-w-4xl mx-auto border border-gray-800">
+            {rows}
+        </div>
     )
   }
 
@@ -359,18 +350,15 @@ function TaskmasterContent() {
   }
 
   return (
-    <div className="h-screen bg-black text-white font-mono flex flex-col overflow-hidden" onMouseUp={() => setIsDragging(false)}>
+    <div className="min-h-screen bg-black text-white font-mono flex flex-col" onMouseUp={() => setIsDragging(false)}>
       
       {/* TOP BAR */}
       <div className="flex-none p-4 border-b border-gray-800 bg-black z-50 space-y-3">
-        {/* TITLE & LINK */}
         <div className="flex justify-between items-center">
             <h1 className="text-lg font-bold tracking-widest text-white lowercase">when2jam</h1>
         </div>
         
-        {/* COMPACT INPUT ROW */}
         <div className="flex flex-col sm:flex-row gap-3">
-            {/* Event Name */}
             <div className="flex-1">
                 <input 
                     value={eventName} 
@@ -380,18 +368,13 @@ function TaskmasterContent() {
                     placeholder="Event Name" 
                 />
             </div>
-
-            {/* User Name */}
             <div className="flex-1">
                 <input value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 p-2 text-sm focus:border-white outline-none transition-colors" placeholder="Your Name" />
             </div>
-
-            {/* Dates */}
             <div className="flex-1 relative">
                 <div onClick={() => !eventId && setShowDatePicker(!showDatePicker)} className={`w-full bg-zinc-900 border border-zinc-800 p-2 text-sm truncate ${!eventId ? 'cursor-pointer hover:border-gray-600' : 'text-gray-500'}`}>
                     {getDateRangeString()}
                 </div>
-                {/* Date Picker Popup */}
                 {showDatePicker && !eventId && (
                     <div className="absolute top-full right-0 mt-1 bg-zinc-900 border border-gray-700 p-3 z-[60] w-64 shadow-xl">
                         <div className="flex justify-between items-center mb-2">
@@ -408,33 +391,28 @@ function TaskmasterContent() {
         </div>
       </div>
 
-      {/* MAIN GRID (Now contains scroll logic inside) */}
-      {renderCalendarGrid()}
+      {/* GRID AREA */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
+         {renderSimpleGrid()}
+      </div>
 
       {/* BOTTOM INFO PANEL */}
       <div className="flex-none bg-zinc-900 border-t border-zinc-700 p-4 pb-8 z-50 min-h-[140px] flex flex-col justify-between">
-         
-         {/* Info Section */}
          <div className="mb-4">
             {renderInfoPanel()}
          </div>
-
-         {/* Controls */}
          <div className="flex justify-between items-center">
              <div className="flex gap-3 text-[10px] text-gray-400 uppercase">
                  <div className="flex items-center gap-1"><div className="w-2 h-2 bg-green-500"></div> You</div>
                  <div className="flex items-center gap-1"><div className="w-2 h-2 bg-white"></div> Group</div>
              </div>
-             
              <div className="flex gap-2 items-center">
                 {statusMsg && <span className="text-green-400 text-xs font-bold animate-pulse">{statusMsg}</span>}
-                
                 {eventId && (
                     <button onClick={copyLink} className="border border-gray-500 text-white px-4 py-2 text-sm font-bold uppercase hover:border-white transition-colors">
                         Copy Link
                     </button>
                 )}
-                
                 <button 
                     onClick={handleSave} 
                     disabled={loading} 
