@@ -1,577 +1,412 @@
-'use client';
+'use client'
 
-import { Suspense, useState, useEffect, useMemo, useRef } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import React, { useState, useEffect, useMemo, Suspense } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 
-// ──────────────────────────────────────────────────────────────
-// Types & Constants
-// ──────────────────────────────────────────────────────────────
-type AvailabilityArray = number[];
+// --- CONSTANTS ---
+const START_HOUR = 8
+const END_HOUR = 20
+const SLOTS_PER_HOUR = 4
+const SLOT_HEIGHT = 16
+const MAX_DAYS = 7
 
-interface ResponseData {
-  user_name: string;
-  availability_array: AvailabilityArray;
+// --- TYPES ---
+type ResponseData = {
+  user_name: string
+  availability: number[]
 }
 
-const HOURS = Array.from({ length: 13 }, (_, i) => i + 9); // 9 AM – 9 PM (Adjustable)
-const TIME_SLOTS_PER_HOUR = 4; // 15 minute increments
-const TOTAL_TIME_SLOTS = HOURS.length * TIME_SLOTS_PER_HOUR;
-
-// Helper: Compare dates ignoring time
-const isSameDate = (d1: Date, d2: Date) => 
-  d1.getFullYear() === d2.getFullYear() &&
-  d1.getMonth() === d2.getMonth() &&
-  d1.getDate() === d2.getDate();
-
-const formatDateParam = (d: Date) => d.toISOString().split('T')[0];
-
-const getDatesInRange = (start: Date, end: Date): Date[] => {
-  const dates: Date[] = [];
-  const cur = new Date(start);
-  cur.setHours(0, 0, 0, 0);
-  const e = new Date(end);
-  e.setHours(0, 0, 0, 0);
-
-  while (cur <= e) {
-    dates.push(new Date(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return dates;
-};
-
-// ──────────────────────────────────────────────────────────────
-// Interactive Calendar Component
-// ──────────────────────────────────────────────────────────────
-function Calendar({
-  startDate,
-  endDate,
-  onSelectRange,
-  onClose,
-}: {
-  startDate: Date | null;
-  endDate: Date | null;
-  onSelectRange: (s: Date | null, e: Date | null) => void;
-  onClose: () => void;
-}) {
-  // Default view to start date or today
-  const [viewDate, setViewDate] = useState(startDate || new Date());
+function TaskmasterContent() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
+  // STATE: Core
+  const [eventId, setEventId] = useState<string | null>(null)
+  const [eventName, setEventName] = useState('Team Sync')
+  const [userName, setUserName] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [statusMsg, setStatusMsg] = useState('')
 
-  const handleClick = (day: number) => {
-    const clicked = new Date(year, month, day);
-    clicked.setHours(0,0,0,0);
-
-    // 1. If nothing selected, start here
-    if (!startDate) {
-      onSelectRange(clicked, null);
-      return;
-    }
-
-    // 2. If start exists but no end, decide if it's before or after
-    if (startDate && !endDate) {
-      if (clicked < startDate) {
-        // User clicked before start, reset start
-        onSelectRange(clicked, null);
-      } else {
-        // Valid range
-        onSelectRange(startDate, clicked);
-        onClose();
-      }
-      return;
-    }
-
-    // 3. If full range exists, reset and start new selection
-    if (startDate && endDate) {
-      onSelectRange(clicked, null);
-    }
-  };
-
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const weeks: JSX.Element[] = [];
-  let day = 1;
-
-  for (let w = 0; w < 6 && day <= daysInMonth; w++) {
-    const week: JSX.Element[] = [];
-    for (let d = 0; d < 7; d++) {
-      if ((w === 0 && d < firstDay) || day > daysInMonth) {
-        week.push(<td key={`empty-${w}-${d}`} />);
-        continue;
-      }
-
-      const current = new Date(year, month, day);
-      current.setHours(0,0,0,0);
-
-      const isStart = startDate && isSameDate(current, startDate);
-      const isEnd = endDate && isSameDate(current, endDate);
-      const isInRange = startDate && endDate && current > startDate && current < endDate;
-
-      week.push(
-        <td key={day} className="p-1">
-          <button
-            onClick={() => handleClick(current.getDate())}
-            className={`
-              w-8 h-8 rounded-full text-sm transition-all
-              ${isStart || isEnd ? 'bg-white text-black font-bold' : ''}
-              ${isInRange ? 'bg-zinc-700' : ''}
-              ${!isStart && !isEnd && !isInRange ? 'hover:bg-zinc-800 text-zinc-300' : ''}
-            `}
-          >
-            {day}
-          </button>
-        </td>
-      );
-      day++;
-    }
-    weeks.push(<tr key={w}>{week}</tr>);
-  }
-
-  return (
-    <div className="absolute top-full left-0 mt-2 bg-zinc-900 border border-zinc-700 p-4 rounded-lg shadow-2xl z-50 min-w-[300px]">
-      <div className="flex justify-between items-center mb-4">
-        <button onClick={() => setViewDate(new Date(year, month - 1, 1))} className="p-1 hover:bg-zinc-800 rounded text-white">←</button>
-        <span className="font-bold text-white">
-          {viewDate.toLocaleString('default', { month: 'long' })} {year}
-        </span>
-        <button onClick={() => setViewDate(new Date(year, month + 1, 1))} className="p-1 hover:bg-zinc-800 rounded text-white">→</button>
-      </div>
-      <table className="w-full text-center">
-        <thead>
-          <tr className="text-xs text-zinc-500 mb-2">
-            <th>S</th><th>M</th><th>T</th><th>W</th><th>T</th><th>F</th><th>S</th>
-          </tr>
-        </thead>
-        <tbody>{weeks}</tbody>
-      </table>
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────
-// Main Logic
-// ──────────────────────────────────────────────────────────────
-function When2Jam() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const eventId = searchParams.get('id');
-
-  // Form State
-  const [eventName, setEventName] = useState('');
-  const [userName, setUserName] = useState('');
-  const [startDate, setStartDate] = useState<Date | null>(null);
-  const [endDate, setEndDate] = useState<Date | null>(null);
+  // STATE: Dates
+  const [startDate, setStartDate] = useState<Date | null>(new Date())
+  const [endDate, setEndDate] = useState<Date | null>(() => {
+    const d = new Date()
+    d.setDate(d.getDate() + 2) 
+    return d
+  })
   
-  // Data State
-  const [myAvailability, setMyAvailability] = useState<AvailabilityArray>([]);
-  const [allResponses, setAllResponses] = useState<ResponseData[]>([]);
+  // STATE: UI & Grid
+  const [showDatePicker, setShowDatePicker] = useState(false)
+  const [pickerMonth, setPickerMonth] = useState(new Date())
+  const [myGrid, setMyGrid] = useState<number[]>([])
+  const [groupResponses, setGroupResponses] = useState<ResponseData[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [paintMode, setPaintMode] = useState(true)
   
-  // UI State
-  const [isPainting, setIsPainting] = useState(false);
-  const [paintMode, setPaintMode] = useState<0 | 1>(1);
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  // STATE: Hover Info
+  const [hoveredNames, setHoveredNames] = useState<string>('')
 
-  // Hover/Tooltip State
-  const [hoveredSlot, setHoveredSlot] = useState<{ dayIdx: number, slotIdx: number, x: number, y: number } | null>(null);
+  // --- EFFECTS ---
 
-  const isGuestMode = !!eventId;
-
-  // Derived Helpers
-  const dates = useMemo(() => {
-    if (!startDate || !endDate) return [];
-    return getDatesInRange(startDate, endDate);
-  }, [startDate, endDate]);
-
-  const totalSlotsPerDay = TOTAL_TIME_SLOTS;
-  const totalSlots = dates.length * totalSlotsPerDay;
-
-  // ── Initialization ──
   useEffect(() => {
-    const init = async () => {
-      if (!eventId) {
-        // Default Create Mode
-        const today = new Date();
-        setStartDate(today);
-        const defEnd = new Date(today);
-        defEnd.setDate(today.getDate() + 3);
-        setEndDate(defEnd);
-        setLoading(false);
-        return;
-      }
+    const id = searchParams.get('id')
+    if (id) {
+      setEventId(id)
+      loadEvent(id)
+    } else {
+      initializeGrid(3)
+    }
+  }, [searchParams])
 
-      // Load Event
-      setLoading(true);
-      const { data: ev, error: evErr } = await supabase
-        .from('events')
-        .select('name, start_date, end_date')
-        .eq('id', eventId)
-        .single();
-
-      if (evErr || !ev) {
-        setError('Event not found');
-        setLoading(false);
-        return;
-      }
-
-      setEventName(ev.name);
-      // Parse dates ensuring local time consistency
-      const s = new Date(ev.start_date + 'T00:00:00');
-      const e = new Date(ev.end_date + 'T00:00:00');
-      setStartDate(s);
-      setEndDate(e);
-
-      // Load Responses
-      const { data: responses } = await supabase
-        .from('responses')
-        .select('user_name, availability_array')
-        .eq('event_id', eventId);
-
-      if (responses) {
-        setAllResponses(responses);
-      }
-
-      setLoading(false);
-    };
-
-    init();
-  }, [eventId]);
-
-  // Initialize my availability array size
   useEffect(() => {
-    if (totalSlots > 0 && myAvailability.length !== totalSlots) {
-      setMyAvailability(new Array(totalSlots).fill(0));
-    }
-  }, [totalSlots]);
-
-  // ── Actions ──
-  const createEvent = async () => {
-    if (!eventName.trim() || !userName.trim() || !startDate || !endDate) {
-      alert('Please fill in all fields');
-      return;
-    }
-    setLoading(true);
+    if (!eventId) return
+    fetchResponses(eventId)
     
-    const { data: ev, error } = await supabase
-      .from('events')
-      .insert({
-        name: eventName.trim(),
-        start_date: formatDateParam(startDate),
-        end_date: formatDateParam(endDate),
+    // Realtime Listener
+    const channel = supabase
+      .channel('room1')
+      .on('postgres_changes', { 
+        event: '*', schema: 'public', table: 'responses', filter: `event_id=eq.${eventId}` 
+      }, () => {
+        console.log("Change detected, refreshing...")
+        fetchResponses(eventId)
       })
-      .select()
-      .single();
+      .subscribe()
+      
+    return () => { supabase.removeChannel(channel) }
+  }, [eventId])
 
-    if (error || !ev) {
-      console.error(error);
-      alert('Failed to create event');
-      setLoading(false);
-      return;
+  // --- LOGIC: DATA ---
+
+  const loadEvent = async (id: string) => {
+    setLoading(true)
+    const { data, error } = await supabase.from('events').select('*').eq('id', id).single()
+    
+    if (error) {
+        console.error("Error loading event:", error)
+        alert("Could not load event. Check console.")
+        setLoading(false)
+        return
     }
 
-    // Add creator's response
-    await supabase.from('responses').insert({
-      event_id: ev.id,
-      user_name: userName.trim(),
-      availability_array: myAvailability,
-    });
+    if (data) {
+      setEventName(data.name)
+      const s = new Date(data.start_date)
+      const e = new Date(data.end_date)
+      setStartDate(s)
+      setEndDate(e)
+      setPickerMonth(s)
+      const diffTime = Math.abs(e.getTime() - s.getTime())
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1
+      initializeGrid(diffDays)
+    }
+    setLoading(false)
+  }
 
-    router.push(`?id=${ev.id}`);
-  };
+  const fetchResponses = async (id: string) => {
+    const { data } = await supabase.from('responses').select('*').eq('event_id', id)
+    if (data) setGroupResponses(data)
+  }
 
-  const updateAvailability = async () => {
-    if (!userName.trim() || !eventId) return alert('Please enter your name');
-    setLoading(true);
-    
-    const { error } = await supabase
-      .from('responses')
-      .upsert(
-        { event_id: eventId, user_name: userName.trim(), availability_array: myAvailability },
-        { onConflict: 'event_id,user_name' }
-      );
+  const initializeGrid = (days: number) => {
+    const totalSlots = days * (END_HOUR - START_HOUR) * SLOTS_PER_HOUR
+    setMyGrid(new Array(totalSlots).fill(0))
+  }
+
+  const handleSave = async () => {
+    if (!userName.trim()) return alert("Please enter your name first.")
+    setLoading(true)
+
+    if (!eventId) {
+      if (!startDate || !endDate) return
+      
+      // 1. Create Event
+      const { data: eventData, error } = await supabase
+        .from('events')
+        .insert({ name: eventName, start_date: startDate.toISOString(), end_date: endDate.toISOString() })
+        .select().single()
+
+      if (error) {
+        console.error(error)
+        alert(`Failed to create event: ${error.message}`)
+        setLoading(false)
+        return
+      }
+      
+      const newId = eventData.id
+      
+      // 2. Save Creator's Response
+      await saveResponse(newId)
+      
+      router.push(`?id=${newId}`)
+      setEventId(newId)
+      setStatusMsg("Event Created!")
+    } else {
+      // Update Existing Response
+      await saveResponse(eventId)
+      setStatusMsg("Availability Saved!")
+    }
+    setLoading(false)
+    setTimeout(() => setStatusMsg(''), 3000)
+  }
+
+  const saveResponse = async (eid: string) => {
+    const { error } = await supabase.from('responses').upsert({
+      event_id: eid, user_name: userName, availability: myGrid
+    }, { onConflict: 'event_id, user_name' })
 
     if (error) {
-      alert('Failed to save. Try a different name?');
-    } else {
-      // Refresh data to see myself in the heatmap immediately
-      const { data } = await supabase
-        .from('responses')
-        .select('user_name, availability_array')
-        .eq('event_id', eventId);
-      
-      if (data) setAllResponses(data);
-      alert('Availability Saved!');
+        console.error("Save error:", error)
+        alert("Error saving availability. Check console.")
     }
-    setLoading(false);
-  };
+  }
 
   const copyLink = () => {
-    if (typeof window !== 'undefined') {
-      navigator.clipboard.writeText(window.location.href)
-        .then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        })
-        .catch(() => alert('Could not copy link manually'));
-    }
-  };
+    navigator.clipboard.writeText(window.location.href)
+    setStatusMsg("Link Copied!")
+    setTimeout(() => setStatusMsg(''), 2000)
+  }
 
-  // ── Painting Logic ──
-  const handlePaint = (dayIdx: number, slotIdx: number, mode: 'start' | 'move') => {
-    const idx = dayIdx * totalSlotsPerDay + slotIdx;
-    
-    if (mode === 'start') {
-      const newMode = myAvailability[idx] === 1 ? 0 : 1;
-      setPaintMode(newMode);
-      setIsPainting(true);
-      updateSlot(idx, newMode);
-    } else if (mode === 'move' && isPainting) {
-      if (myAvailability[idx] !== paintMode) {
-        updateSlot(idx, paintMode);
+  // --- LOGIC: HEATMAP & INTERACTION ---
+
+  const heatmap = useMemo(() => {
+    if (groupResponses.length === 0) return null
+    const map = new Array(myGrid.length).fill(0)
+    groupResponses.forEach(r => {
+      // Ensure array exists before mapping
+      if(r.availability) {
+          r.availability.forEach((val: number, i: number) => {
+            if (map[i] !== undefined) map[i] += val
+          })
       }
-    }
-  };
+    })
+    return map
+  }, [groupResponses, myGrid.length])
 
-  const updateSlot = (idx: number, val: 0 | 1) => {
-    setMyAvailability(prev => {
-      const next = [...prev];
-      next[idx] = val;
-      return next;
-    });
-  };
+  // Calculate who is free at a specific index
+  const getNamesForSlot = (index: number) => {
+      const names = groupResponses
+        .filter(r => r.availability && r.availability[index] === 1)
+        .map(r => r.user_name)
+      
+      // Also check if "I" am free (local state might be newer than DB state)
+      if (myGrid[index] === 1 && !names.includes(userName) && userName) {
+          names.push(userName + " (You)")
+      }
 
-  // ── Heatmap Calculation ──
-  const getSlotData = (dayIdx: number, slotIdx: number) => {
-    const globalIdx = dayIdx * totalSlotsPerDay + slotIdx;
-    
-    let count = 0;
-    const availableUsers: string[] = [];
-    const unavailableUsers: string[] = [];
+      if (names.length === 0) return "No one is available"
+      return names.join(", ") + " available"
+  }
 
-    allResponses.forEach(r => {
-      if (r.availability_array?.[globalIdx] === 1) {
-        count++;
-        availableUsers.push(r.user_name);
+  const handleSlotHover = (index: number) => {
+      // Update Tooltip
+      setHoveredNames(getNamesForSlot(index))
+
+      // Drag Paint Logic
+      if (isDragging) {
+          updateLocalGrid(index, paintMode ? 1 : 0)
+      }
+  }
+
+  const handleSlotMouseDown = (index: number) => {
+    setIsDragging(true)
+    const newVal = myGrid[index] === 0 ? 1 : 0
+    setPaintMode(newVal === 1)
+    updateLocalGrid(index, newVal)
+  }
+
+  const updateLocalGrid = (index: number, val: number) => {
+    const newGrid = [...myGrid]
+    newGrid[index] = val
+    setMyGrid(newGrid)
+  }
+
+  // Date Picker Logic
+  const handleDayClick = (date: Date) => {
+    if (eventId) return
+    const cleanDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+    if (!startDate || (startDate && endDate)) {
+      setStartDate(cleanDate); setEndDate(null)
+    } else {
+      if (cleanDate < startDate) {
+        setStartDate(cleanDate)
       } else {
-        unavailableUsers.push(r.user_name);
+        const diffDays = Math.ceil(Math.abs(cleanDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+        if (diffDays >= MAX_DAYS) { setStartDate(cleanDate); setEndDate(null) } 
+        else { setEndDate(cleanDate); initializeGrid(diffDays + 1); setShowDatePicker(false) }
       }
-    });
+    }
+  }
 
-    return {
-      count,
-      availableUsers,
-      unavailableUsers,
-      opacity: allResponses.length > 0 ? count / allResponses.length : 0
-    };
-  };
+  const changeMonth = (delta: number) => {
+    const newDate = new Date(pickerMonth)
+    newDate.setMonth(newDate.getMonth() + delta)
+    setPickerMonth(newDate)
+  }
 
-  // ── Render ──
-  if (loading && isGuestMode && allResponses.length === 0) 
-    return <div className="flex min-h-screen items-center justify-center bg-black text-white">Loading Event...</div>;
+  // --- RENDERERS ---
 
-  if (error) 
-    return <div className="flex min-h-screen items-center justify-center bg-black text-red-500">{error}</div>;
+  const renderCalendarGrid = () => {
+    if (!startDate) return null
+    const days = endDate ? Math.ceil(Math.abs(endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1 : 1
+    
+    const timeLabels = []
+    for(let h=START_HOUR; h<END_HOUR; h++) {
+      for(let s=0; s<SLOTS_PER_HOUR; s++) {
+        const isHour = s === 0
+        const label = (h === 12 && isHour) ? '12 PM' : (isHour ? `${h > 12 ? h-12 : h} ${h >= 12 ? 'PM' : 'AM'}` : '')
+        timeLabels.push(
+          <div key={`t-${h}-${s}`} className="flex justify-end pr-2 text-[0.7rem] text-white font-bold relative box-border" style={{ height: SLOT_HEIGHT }}>
+             {isHour && <span className="bg-black -mt-2 pb-1 z-10">{label}</span>}
+          </div>
+        )
+      }
+    }
+
+    const dayColumns = []
+    for (let d=0; d<days; d++) {
+      const currentDay = new Date(startDate)
+      currentDay.setDate(startDate.getDate() + d)
+      const daySlots = []
+      const dayOffset = d * (END_HOUR - START_HOUR) * SLOTS_PER_HOUR
+      for(let i=0; i < (END_HOUR - START_HOUR) * SLOTS_PER_HOUR; i++) {
+        const globalIndex = dayOffset + i
+        const isSelected = myGrid[globalIndex] === 1
+        const isHourStart = i % 4 === 0
+        
+        // Heatmap Visuals
+        let bgStyle = {}
+        const count = (heatmap && heatmap[globalIndex]) || 0
+        const max = groupResponses.length || 1
+        
+        if (eventId && count > 0) {
+           const intensity = count / max
+           // White with opacity based on popularity
+           bgStyle = { backgroundColor: `rgba(255, 255, 255, ${intensity})` }
+        }
+        
+        daySlots.push(
+          <div key={`s-${globalIndex}`} 
+            onMouseDown={() => handleSlotMouseDown(globalIndex)} 
+            onMouseEnter={() => handleSlotHover(globalIndex)}
+            className={`border-b border-gray-800 box-border cursor-crosshair relative w-full ${isHourStart ? 'border-b-white/40' : ''} ${isSelected ? '!bg-green-400 !border-green-400' : ''}`}
+            style={{ height: SLOT_HEIGHT, ...bgStyle }} 
+          />
+        )
+      }
+      dayColumns.push(
+        <div key={`d-${d}`} className="flex flex-col min-w-[80px] flex-1">
+          <div className="sticky top-0 bg-black border-b border-white py-4 text-center z-20">
+            <div className="font-bold text-sm text-white">{currentDay.toLocaleDateString('en-US', { weekday: 'short' })}</div>
+            <div className="text-xs text-gray-400">{currentDay.getMonth()+1}/{currentDay.getDate()}</div>
+          </div>
+          <div className="w-full">{daySlots}</div>
+        </div>
+      )
+    }
+    return (
+      <div className="flex border border-gray-700 bg-gray-900 gap-px overflow-x-auto max-w-full w-full no-scrollbar">
+         <div className="flex flex-col min-w-[50px] bg-black sticky left-0 z-30 border-r border-gray-700 pt-[66px]">{timeLabels}</div>
+         <div className="flex flex-1 min-w-0">{dayColumns}</div>
+      </div>
+    )
+  }
 
   return (
-    <div 
-      className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-emerald-500/30"
-      onMouseUp={() => setIsPainting(false)}
-    >
-      {/* Tooltip Overlay */}
-      {hoveredSlot && (
-        <div 
-          className="fixed pointer-events-none z-50 bg-black border border-zinc-700 shadow-2xl rounded p-3 text-xs min-w-[150px]"
-          style={{ left: hoveredSlot.x + 15, top: hoveredSlot.y + 15 }}
-        >
-          <div className="font-bold text-emerald-400 mb-1">
-             Available ({getSlotData(hoveredSlot.dayIdx, hoveredSlot.slotIdx).availableUsers.length}/{allResponses.length})
+    <div className="min-h-screen bg-black text-white font-mono flex flex-col items-center py-10 px-4 select-none w-full relative" onMouseUp={() => setIsDragging(false)}>
+      
+      {/* HEADER */}
+      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 pb-6 border-b border-gray-800">
+        <div className="flex flex-col">
+          <label className="text-xs text-gray-500 font-bold mb-2 uppercase tracking-widest">Event Name</label>
+          <input value={eventName} onChange={(e) => !eventId && setEventName(e.target.value)} readOnly={!!eventId} className={`bg-transparent border-b border-gray-800 py-2 outline-none text-lg focus:border-white transition-colors w-full ${eventId ? 'text-gray-400 cursor-default' : ''}`} placeholder="Event Name" />
+        </div>
+        <div className="flex flex-col">
+          <label className="text-xs text-gray-500 font-bold mb-2 uppercase tracking-widest">Your Name</label>
+          <input value={userName} onChange={(e) => setUserName(e.target.value)} className="bg-transparent border-b border-gray-800 py-2 outline-none text-lg focus:border-white transition-colors placeholder-gray-700 w-full" placeholder="Required" />
+        </div>
+        <div className="flex flex-col relative">
+          <label className="text-xs text-gray-500 font-bold mb-2 uppercase tracking-widest">Time Period</label>
+          <div onClick={() => !eventId && setShowDatePicker(!showDatePicker)} className={`border-b border-gray-800 py-2 text-lg cursor-pointer flex justify-between items-center w-full ${eventId ? 'cursor-default text-gray-400' : ''}`}>
+            <span>{startDate ? `${startDate.getMonth()+1}/${startDate.getDate()}` : 'Select'} {' - '} {endDate ? `${endDate.getMonth()+1}/${endDate.getDate()}` : (startDate ? 'Select End' : '')}</span>
+            {!eventId && <span className="text-xs text-gray-600">▼</span>}
           </div>
-          <ul className="mb-2 text-zinc-300">
-            {getSlotData(hoveredSlot.dayIdx, hoveredSlot.slotIdx).availableUsers.map(u => <li key={u}>{u}</li>)}
-          </ul>
-          {getSlotData(hoveredSlot.dayIdx, hoveredSlot.slotIdx).unavailableUsers.length > 0 && (
-            <>
-              <div className="font-bold text-red-400 mb-1 border-t border-zinc-800 pt-1">Unavailable</div>
-              <ul className="text-zinc-500">
-                {getSlotData(hoveredSlot.dayIdx, hoveredSlot.slotIdx).unavailableUsers.map(u => <li key={u}>{u}</li>)}
-              </ul>
-            </>
+          
+          {/* DATE PICKER */}
+          {showDatePicker && !eventId && (
+            <div className="absolute top-20 right-0 bg-black border border-gray-600 p-4 z-50 w-72 shadow-2xl">
+               <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-800">
+                  <button onClick={() => changeMonth(-1)} className="text-gray-400 hover:text-white px-2">&lt;</button>
+                  <span className="font-bold uppercase">{pickerMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
+                  <button onClick={() => changeMonth(1)} className="text-gray-400 hover:text-white px-2">&gt;</button>
+               </div>
+               <div className="grid grid-cols-7 gap-1 text-center mb-2">{['S','M','T','W','T','F','S'].map(d => <div key={d} className="text-xs text-gray-600">{d}</div>)}</div>
+               <div className="grid grid-cols-7 gap-1">{renderMiniCalendarCells(pickerMonth, startDate, endDate, handleDayClick)}</div>
+               <div className="text-center text-xs text-gray-500 mt-4">Max Duration: 7 Days</div>
+            </div>
           )}
         </div>
-      )}
+      </div>
 
-      <div className="max-w-6xl mx-auto p-4 sm:p-8">
-        {/* Header */}
-        <header className="flex flex-col md:flex-row justify-between items-end md:items-center mb-10 gap-6 border-b border-zinc-800 pb-6">
-          <div>
-             <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-              when2jam
-            </h1>
-            <p className="text-zinc-500 text-sm mt-1">Find a time that works for everyone.</p>
-          </div>
+      {/* GRID */}
+      <div className="w-full max-w-4xl overflow-hidden relative" onMouseLeave={() => setHoveredNames('')}>
+         {renderCalendarGrid()}
          
-          <div className="flex gap-3 w-full md:w-auto">
-            {isGuestMode && (
-              <button 
-                onClick={copyLink} 
-                className={`flex-1 md:flex-none px-4 py-2 rounded font-medium transition-all ${copied ? 'bg-green-600 text-white' : 'border border-zinc-600 hover:bg-zinc-800'}`}
-              >
-                {copied ? 'Link Copied!' : 'Copy Link'}
-              </button>
-            )}
-            <button
-              onClick={isGuestMode ? updateAvailability : createEvent}
-              disabled={loading}
-              className="flex-1 md:flex-none bg-white text-black hover:bg-zinc-200 px-6 py-2 rounded font-bold disabled:opacity-50 transition-colors"
-            >
-              {loading ? 'Saving...' : isGuestMode ? 'Update Availability' : 'Create Event'}
-            </button>
-          </div>
-        </header>
+         {/* HOVER TOOLTIP (Floating Status Bar) */}
+         <div className="fixed bottom-0 left-0 w-full bg-zinc-900 border-t border-zinc-700 p-4 text-center z-50">
+            <span className="text-sm font-bold text-white uppercase tracking-widest">
+               {hoveredNames || "Hover over the grid to see availability"}
+            </span>
+         </div>
+      </div>
 
-        {/* Inputs Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Event Name</label>
-            <input
-              value={eventName}
-              onChange={e => !isGuestMode && setEventName(e.target.value)}
-              readOnly={isGuestMode}
-              placeholder="Weekly Sync"
-              className={`w-full bg-zinc-900 border border-zinc-700 rounded p-3 focus:border-emerald-500 outline-none transition-colors ${isGuestMode ? 'text-zinc-400 cursor-not-allowed' : ''}`}
-            />
-          </div>
-
-          <div className="relative space-y-2">
-            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Dates</label>
-            <div 
-              onClick={() => !isGuestMode && setShowCalendar(!showCalendar)}
-              className={`w-full bg-zinc-900 border border-zinc-700 rounded p-3 flex justify-between items-center ${!isGuestMode ? 'cursor-pointer hover:border-zinc-500' : 'cursor-not-allowed text-zinc-400'}`}
-            >
-              <span>
-                {startDate && endDate 
-                  ? `${startDate.toLocaleDateString()} — ${endDate.toLocaleDateString()}` 
-                  : 'Select Date Range'}
-              </span>
-              {!isGuestMode && <span className="text-zinc-500">📅</span>}
-            </div>
-            
-            {showCalendar && !isGuestMode && (
-              <Calendar 
-                startDate={startDate} 
-                endDate={endDate} 
-                onSelectRange={(s, e) => { setStartDate(s); setEndDate(e); }} 
-                onClose={() => setShowCalendar(false)} 
-              />
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Your Name</label>
-            <input 
-              value={userName} 
-              onChange={e => setUserName(e.target.value)} 
-              placeholder="John Doe"
-              className="w-full bg-zinc-900 border border-zinc-700 rounded p-3 focus:border-emerald-500 outline-none transition-colors" 
-            />
-          </div>
-        </div>
-
-        {/* The Grid Container */}
-        <div className="relative border border-zinc-800 rounded-xl overflow-hidden bg-zinc-900/50 shadow-inner" onMouseLeave={() => { setIsPainting(false); setHoveredSlot(null); }}>
-          <div className="overflow-x-auto">
-            <div className="flex select-none" style={{ minWidth: `${Math.max(dates.length * 140, 600)}px` }}>
-              
-              {/* Time Column */}
-              <div className="w-16 flex-shrink-0 bg-zinc-900 border-r border-zinc-800 sticky left-0 z-10">
-                <div className="h-12"></div> {/* Header Spacer */}
-                {HOURS.map(h => (
-                  <div key={h} className="h-16 border-b border-zinc-800 relative">
-                    <span className="absolute -top-2.5 right-2 text-[10px] font-mono text-zinc-500 bg-zinc-900 px-1">
-                      {h > 12 ? h - 12 : h} {h >= 12 ? 'PM' : 'AM'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Date Columns */}
-              {dates.map((date, dayIdx) => (
-                <div key={date.toISOString()} className="flex-1 min-w-[100px] border-r border-zinc-800/50 last:border-r-0">
-                  
-                  {/* Date Header */}
-                  <div className="h-12 flex flex-col justify-center items-center bg-zinc-900/80 border-b border-zinc-800">
-                    <div className="text-[10px] font-bold text-zinc-500 uppercase">{date.toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                    <div className="text-sm font-bold">{date.getDate()}</div>
-                  </div>
-
-                  {/* Time Slots */}
-                  <div className="relative">
-                    {Array.from({ length: TOTAL_TIME_SLOTS }).map((_, slotIdx) => {
-                      const globalIdx = dayIdx * totalSlotsPerDay + slotIdx;
-                      const isMySelection = myAvailability[globalIdx] === 1;
-                      const { opacity } = getSlotData(dayIdx, slotIdx);
-                      
-                      // Logic for borders: darker line every hour (4 slots)
-                      const isHourMark = slotIdx % 4 === 3;
-
-                      return (
-                        <div
-                          key={slotIdx}
-                          onMouseDown={(e) => { e.preventDefault(); handlePaint(dayIdx, slotIdx, 'start'); }}
-                          onMouseEnter={(e) => {
-                            handlePaint(dayIdx, slotIdx, 'move');
-                            setHoveredSlot({ dayIdx, slotIdx, x: e.clientX, y: e.clientY });
-                          }}
-                          onMouseMove={(e) => setHoveredSlot({ dayIdx, slotIdx, x: e.clientX, y: e.clientY })}
-                          className={`
-                            h-4 w-full cursor-pointer transition-colors duration-75
-                            ${isHourMark ? 'border-b border-zinc-800' : 'border-b border-zinc-800/30'}
-                          `}
-                          style={{
-                            // If I selected it, show White.
-                            // If I didn't, show Green based on group availability opacity.
-                            backgroundColor: isMySelection 
-                              ? '#ffffff' 
-                              : `rgba(16, 185, 129, ${opacity})` // Tailwind Emerald-500
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Legend */}
-        <div className="mt-6 flex items-center gap-6 text-xs text-zinc-400">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-white border border-zinc-700 rounded-sm"></div>
-            <span>Your Availability</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-emerald-500 rounded-sm"></div>
-            <span>Group Availability</span>
-          </div>
-          <div className="ml-auto">
-            Click & Drag to paint. Hover to see details.
-          </div>
-        </div>
+      {/* FOOTER ACTIONS */}
+      <div className="w-full max-w-4xl mt-8 pt-6 border-t border-gray-800 flex flex-col md:flex-row justify-between items-center gap-4 mb-20">
+         <div className="flex gap-4">
+             <div className="flex items-center gap-2 text-xs text-gray-500"><div className="w-3 h-3 bg-green-400"></div> You</div>
+             <div className="flex items-center gap-2 text-xs text-gray-500"><div className="w-3 h-3 bg-white"></div> Group Heatmap</div>
+         </div>
+         <div className="flex gap-4 items-center w-full md:w-auto justify-center">
+            {statusMsg && <span className="text-green-400 text-xs font-bold tracking-widest uppercase animate-pulse">{statusMsg}</span>}
+            {eventId && <button onClick={copyLink} className="border border-gray-600 hover:border-white text-white px-4 py-3 text-sm font-bold uppercase transition-colors whitespace-nowrap">Copy Link</button>}
+            <button onClick={handleSave} disabled={loading} className="bg-white text-black px-4 py-3 text-sm font-bold uppercase hover:bg-gray-300 transition-colors disabled:opacity-50 whitespace-nowrap">{loading ? 'Saving...' : (eventId ? 'Update Availability' : 'Create Event')}</button>
+         </div>
       </div>
     </div>
-  );
+  )
+}
+
+// --- HELPERS ---
+function renderMiniCalendarCells(currentMonth: Date, start: Date | null, end: Date | null, onClick: (d: Date) => void) {
+  const year = currentMonth.getFullYear()
+  const month = currentMonth.getMonth()
+  const firstDay = new Date(year, month, 1).getDay()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const prevMonthDays = new Date(year, month, 0).getDate()
+  const cells = []
+  
+  for (let i=firstDay-1; i>=0; i--) cells.push(<div key={`prev-${i}`} className="aspect-square flex items-center justify-center text-gray-800 text-sm cursor-default">{prevMonthDays - i}</div>)
+  for (let d=1; d<=daysInMonth; d++) {
+    const date = new Date(year, month, d)
+    date.setHours(0,0,0,0)
+    const sTime = start ? new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime() : 0
+    const eTime = end ? new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime() : 0
+    const cTime = date.getTime()
+    let classes = "text-gray-300 hover:border hover:border-gray-500"
+    if (cTime === sTime || cTime === eTime) classes = "bg-white text-black font-bold"
+    else if (start && end && cTime > sTime && cTime < eTime) classes = "bg-gray-800 text-white"
+    cells.push(<div key={`curr-${d}`} onClick={() => onClick(date)} className={`aspect-square flex items-center justify-center text-sm cursor-pointer border border-transparent transition-all ${classes}`}>{d}</div>)
+  }
+  const remaining = 42 - cells.length
+  for (let i=1; i<=remaining; i++) cells.push(<div key={`next-${i}`} className="aspect-square flex items-center justify-center text-gray-800 text-sm cursor-default">{i}</div>)
+  return cells
 }
 
 export default function Page() {
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-black text-white">Loading...</div>}>
-      <When2Jam />
+    <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center">Loading...</div>}>
+      <TaskmasterContent />
     </Suspense>
-  );
+  )
 }
